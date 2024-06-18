@@ -22,6 +22,16 @@ def apply_ford_curvature_limits(apply_curvature, apply_curvature_last, current_c
 
   return clip(apply_curvature, -CarControllerParams.CURVATURE_MAX, CarControllerParams.CURVATURE_MAX)
 
+def hysteresis(current_value, old_value, target, stdDevLow: float, stdDevHigh: float):
+  if target - stdDevLow < current_value < target + stdDevHigh:
+    result = old_value
+  elif current_value <= target - stdDevLow:
+    result = 1
+  elif current_value >= target + stdDevHigh:
+    result = 0
+
+  return result
+
 def actuators_calc(self, brake):
   ts = self.frame * DT_CTRL
   brake_actuate = hysteresis(brake, self.brake_actuate_last, self.brake_actutator_target, self.brake_actutator_stdDevLow, self.brake_actutator_stdDevHigh)
@@ -64,8 +74,33 @@ class CarController(CarControllerBase):
     self.main_on_last = False
     self.lkas_enabled_last = False
     self.steer_alert_last = False
+    self.gac_tr_cluster_last = -1 # previous state of ui elements
+    self.gac_tr_cluster_last_ts = 0 # prevous state of ui elements
+    self.brake_actuate_last = 0 # previous state of brake actuator
+    self.precharge_actuate_last = 0 # previous state of pre-charge actuator
+    self.precharge_actuate_ts = 0 # previous state of pre-charge actuator
     self.lead_distance_bars_last = None
+    
+    self.brake_actutator_target = -0.5 # Default: -0.5
+    self.brake_actutator_stdDevLow = 0.2 # Default: -0.5
 
+    # Deactivates at self.brake_actutator_target + self.brake_actutator_stdDevHigh
+    self.brake_actutator_stdDevHigh = 0.1 # Default: 0
+
+    # Activates at self.precharge_actutator_target - self.precharge_actutator_stdDevLow
+    self.precharge_actutator_stdDevLow = 0.1 # Default: -0.25
+
+    # Deactivates at self.precharge_actutator_target + self.precharge_actutator_stdDevHigh
+    self.precharge_actutator_stdDevHigh = 0.1 # Default: 0
+
+    self.precharge_actutator_target = -0.1
+    self.brake_0_point = 0
+    self.brake_converge_at = -1.5
+    self.testing_active = False
+
+    # Deactivates at self.precharge_actutator_target + self.precharge_actutator_stdDevHigh
+    self.target_speed_multiplier = 1 # Default: 0
+  
   def update(self, CC, CS, now_nanos):
     can_sends = []
 
