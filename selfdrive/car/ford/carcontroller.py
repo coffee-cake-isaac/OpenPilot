@@ -101,6 +101,8 @@ class CarController(CarControllerBase):
 
     # Deactivates at self.precharge_actutator_target + self.precharge_actutator_stdDevHigh
     self.target_speed_multiplier = 1 # Default: 0
+
+    self.brake_clip = self.brake_actutator_target - self.brake_actutator_stdDevLow
   
   def update(self, CC, CS, now_nanos):
     can_sends = []
