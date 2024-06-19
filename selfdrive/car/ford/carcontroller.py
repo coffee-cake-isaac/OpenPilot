@@ -1,11 +1,12 @@
 from cereal import car
 from opendbc.can.packer import CANPacker
-from openpilot.common.numpy_fast import clip
+from openpilot.common.numpy_fast import clip, interp
 from openpilot.selfdrive.car import apply_std_steer_angle_limits
 from openpilot.selfdrive.car.ford import fordcan
 from openpilot.selfdrive.car.ford.values import CarControllerParams, FordFlags
 from openpilot.selfdrive.car.interfaces import CarControllerBase
 from openpilot.selfdrive.controls.lib.drive_helpers import V_CRUISE_MAX
+from openpilot.common.realtime import DT_CTRL # used for timing based calculations
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
 VisualAlert = car.CarControl.HUDControl.VisualAlert
@@ -22,6 +23,45 @@ def apply_ford_curvature_limits(apply_curvature, apply_curvature_last, current_c
 
   return clip(apply_curvature, -CarControllerParams.CURVATURE_MAX, CarControllerParams.CURVATURE_MAX)
 
+def hysteresis(current_value, old_value, target, stdDevLow: float, stdDevHigh: float):
+  if target - stdDevLow < current_value < target + stdDevHigh:
+    result = old_value
+  elif current_value <= target - stdDevLow:
+    result = 1
+  elif current_value >= target + stdDevHigh:
+    result = 0
+
+  return result
+
+def actuators_calc(self, brake):
+  ts = self.frame * DT_CTRL
+  brake_actuate = hysteresis(brake, self.brake_actuate_last, self.brake_actutator_target, self.brake_actutator_stdDevLow, self.brake_actutator_stdDevHigh)
+  self.brake_actuate_last = brake_actuate
+
+  # define the brake pre-charge actuator, also apply a hysterisis
+  precharge_actuate = hysteresis(brake,
+                                 self.precharge_actuate_last,
+                                 self.precharge_actutator_target,
+                                 self.precharge_actutator_stdDevLow,
+                                 self.precharge_actutator_stdDevHigh)
+  if precharge_actuate and not self.precharge_actuate_last:
+    self.precharge_actuate_ts = ts
+  elif not precharge_actuate:
+    self.precharge_actuate_ts = 0
+
+  # determine whether to apply brake pre-charge
+  if (
+      precharge_actuate and
+      not brake_actuate and
+      self.precharge_actuate_ts > 0 and
+      brake > (self.precharge_actutator_target - self.precharge_actutator_stdDevLow) and
+      (ts - self.precharge_actuate_ts) > (200 * DT_CTRL)
+    ):
+    precharge_actuate = False
+
+  self.precharge_actuate_last = precharge_actuate
+
+  return precharge_actuate, brake_actuate
 
 class CarController(CarControllerBase):
   def __init__(self, dbc_name, CP, VM):
@@ -35,8 +75,35 @@ class CarController(CarControllerBase):
     self.main_on_last = False
     self.lkas_enabled_last = False
     self.steer_alert_last = False
+    self.gac_tr_cluster_last = -1 # previous state of ui elements
+    self.gac_tr_cluster_last_ts = 0 # prevous state of ui elements
+    self.brake_actuate_last = 0 # previous state of brake actuator
+    self.precharge_actuate_last = 0 # previous state of pre-charge actuator
+    self.precharge_actuate_ts = 0 # previous state of pre-charge actuator
     self.lead_distance_bars_last = None
+    
+    self.brake_actutator_target = -0.5 # Default: -0.5
+    self.brake_actutator_stdDevLow = 0.2 # Default: -0.5
 
+    # Deactivates at self.brake_actutator_target + self.brake_actutator_stdDevHigh
+    self.brake_actutator_stdDevHigh = 0.1 # Default: 0
+
+    # Activates at self.precharge_actutator_target - self.precharge_actutator_stdDevLow
+    self.precharge_actutator_stdDevLow = 0.1 # Default: -0.25
+
+    # Deactivates at self.precharge_actutator_target + self.precharge_actutator_stdDevHigh
+    self.precharge_actutator_stdDevHigh = 0.1 # Default: 0
+
+    self.precharge_actutator_target = -0.1
+    self.brake_0_point = 0
+    self.brake_converge_at = -1.5
+    self.testing_active = False
+
+    # Deactivates at self.precharge_actutator_target + self.precharge_actutator_stdDevHigh
+    self.target_speed_multiplier = 1 # Default: 0
+
+    self.brake_clip = self.brake_actutator_target - self.brake_actutator_stdDevLow
+  
   def update(self, CC, CS, now_nanos):
     can_sends = []
 
@@ -92,7 +159,17 @@ class CarController(CarControllerBase):
       if not CC.longActive or gas < CarControllerParams.MIN_GAS:
         gas = CarControllerParams.INACTIVE_GAS
       stopping = CC.actuators.longControlState == LongCtrlState.stopping
-      can_sends.append(fordcan.create_acc_msg(self.packer, self.CAN, CC.longActive, gas, accel, stopping, v_ego_kph=V_CRUISE_MAX))
+      precharge_actuate, brake_actuate = actuators_calc(self, accel)
+      brake = accel
+      if brake < 0 and brake_actuate:
+        brake = interp(accel, [ CarControllerParams.ACCEL_MIN, self.brake_converge_at, self.brake_clip], [CarControllerParams.ACCEL_MIN, self.brake_converge_at, self.brake_0_point])
+
+      # Calculate targetSpeed
+      targetSpeed = clip(actuators.speed * self.target_speed_multiplier, 0, V_CRUISE_MAX)
+      if not CC.longActive and hud_control.setSpeed:
+        targetSpeed = hud_control.setSpeed
+
+      can_sends.append(fordcan.create_acc_msg(self.packer, self.CAN, CC.longActive, gas, brake, stopping, brake_actuate, precharge_actuate, v_ego_kph=targetSpeed))
 
     ### ui ###
     send_ui = (self.main_on_last != main_on) or (self.lkas_enabled_last != CC.latActive) or (self.steer_alert_last != steer_alert)
