@@ -82,8 +82,8 @@ class CarController(CarControllerBase):
     self.precharge_actuate_ts = 0 # previous state of pre-charge actuator
     self.lead_distance_bars_last = None
     
-    self.brake_actutator_target = -0.5 # Default: -0.5
-    self.brake_actutator_stdDevLow = 0.2 # Default: -0.5
+    self.brake_actutator_target = -0.1 # Default: -0.5
+    self.brake_actutator_stdDevLow = 0.1 # Default: -0.5
 
     # Deactivates at self.brake_actutator_target + self.brake_actutator_stdDevHigh
     self.brake_actutator_stdDevHigh = 0.1 # Default: 0
@@ -161,8 +161,6 @@ class CarController(CarControllerBase):
       stopping = CC.actuators.longControlState == LongCtrlState.stopping
       precharge_actuate, brake_actuate = actuators_calc(self, accel)
       brake = accel
-      if brake < 0 and brake_actuate:
-        brake = interp(accel, [ CarControllerParams.ACCEL_MIN, self.brake_converge_at, self.brake_clip], [CarControllerParams.ACCEL_MIN, self.brake_converge_at, self.brake_0_point])
 
       # Calculate targetSpeed
       targetSpeed = clip(actuators.speed * self.target_speed_multiplier, 0, V_CRUISE_MAX)
