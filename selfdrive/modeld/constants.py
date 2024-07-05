@@ -15,6 +15,7 @@ class ModelConstants:
   # model inputs constants
   MODEL_FREQ = 5
   FEATURE_LEN = 512
+  FULL_HISTORY_BUFFER_LEN = 99
   HISTORY_BUFFER_LEN = 24
   DESIRE_LEN = 8
   TRAFFIC_CONVENTION_LEN = 2

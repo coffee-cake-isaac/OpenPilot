@@ -284,6 +284,5 @@ def main() -> NoReturn:
 
     calibrator.send_data(pm, sm.all_checks())
 
-
 if __name__ == "__main__":
   main()
